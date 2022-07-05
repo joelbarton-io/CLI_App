@@ -1,0 +1,198 @@
+#! /usr/bin/env ruby
+
+require "pg"
+require "io/console"
+
+class ExpenseData
+  attr_reader :db
+
+  def initialize
+    @db = PG.connect(dbname:"expenses")
+    puts 'hi'
+    setup_schema()
+  end
+
+  def show_list
+    result = db.exec "SELECT * FROM expenses ORDER BY created_on ASC;"
+    format(result)
+  end
+
+  def add(args)
+    if args.size < 2
+      # if the number of elements in `args` is less than 2, proceed to `else` statement
+      # `args` is an array created from the ARGV shell array object which stores arguments, it contains the user-specified arguments
+
+      puts <<-ERROR
+      You must provide an amount and memo.
+
+      HINT: ./expenses add AMOUNT MEMO
+      ERROR
+    else
+      # inserts user input into database
+      sql_statement = "INSERT INTO expenses (amount, memo) VALUES ($1, $2);"
+      db.exec_params(sql_statement, args)
+    end
+  end
+
+  def search(args)
+    search_term = args.first
+    formated_search_term = "%"+search_term+"%"
+    sql_statement = "SELECT * FROM expenses WHERE memo ILIKE ($1);"
+    sql_sum = "SELECT sum(amount) FROM expenses WHERE memo ILIKE ($1);"
+    search_result = db.exec_params(sql_statement, [formated_search_term])
+
+    case search_result.values.first
+    when nil then "There are no expenses."
+    else
+      puts "There are #{search_result.ntuples} expenses."
+      format(search_result)
+      sum = db.exec_params(sql_sum, [formated_search_term])
+      puts <<~SUM
+      --------------------------------------------
+      TOTAL #{(sum[0]["sum"]).rjust(25)}
+      SUM
+    end
+  end
+
+  def delete(args)
+    args = args.map { |el| el.to_i }
+    select_sql = "SELECT * FROM expenses WHERE id = ($1);"
+    row_to_delete = db.exec_params(select_sql, args)
+
+    # puts row_to_delete.values
+     # if the exec_params function returns no rows, then row_to_delete.first will be nil
+     if row_to_delete.first.nil?
+       puts <<~ERROR
+       There is no expense with an id of '#{args.first}'.
+       ERROR
+     else
+      delete_sql = "DELETE FROM expenses WHERE id = ($1);"
+      puts <<~SUCCESS
+      The following expense has been deleted:
+      SUCCESS
+      format(row_to_delete)
+      db.exec_params(delete_sql, args)
+     end
+  end
+
+  def clear()
+    sql_statement = "TRUNCATE TABLE expenses;"
+    puts <<~QUESTION
+    This will remove all expenses. Do you wish to continue? (y/n)
+    QUESTION
+    # user_answer = STDIN.gets.chomp.downcase
+    user_answer = $stdin.getch
+    case user_answer
+    when "n" then puts "No data deleted."
+    when "y"
+      db.exec(sql_statement)
+      puts "All data deleted."
+    else puts "Invalid input."
+    end
+  end
+
+  def list()
+    all_rows = db.exec "SELECT * FROM expenses;"
+
+    case all_rows.values.first
+    when nil then puts "There are no expenses."
+    else
+
+      puts "There are #{all_rows.ntuples} expenses." # if num_expenses(all_rows.ntuples)
+      format(all_rows)
+      sum = db.exec "SELECT sum(amount) FROM expenses;"
+      puts <<~SUM
+      --------------------------------------------
+      TOTAL #{(sum[0]["sum"]).rjust(25)}
+      SUM
+    end
+  end
+
+  private
+
+  def format(post_gres_result_data)
+    post_gres_result_data.each do |tuple|
+      columns = [ tuple["id"].rjust(3),
+                  tuple["created_on"].rjust(10),
+                  tuple["amount"].rjust(12),
+                  tuple["memo"] ]
+
+      puts columns.join(" | ")
+    end
+  end
+
+  def expense_count(num_expenses)
+    num_expenses < 1
+  end
+
+  def setup_schema
+    sql_query = <<~SQL SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'expenses';
+    SQL
+    check_table = db.exec(sql_query)
+
+    if check_table[0]["count"] == "0"
+      create_table_sql = <<~SQL
+      CREATE TABLE expenses (
+        id integer NOT NULL,
+        amount numeric(6,2) NOT NULL,
+        memo text NOT NULL,
+        created_on date DEFAULT now() NOT NULL,
+        CONSTRAINT expenses_amount_check CHECK ((amount > 0.01))
+      );
+      SQL
+      db.exec(create_table_sql)
+    end
+  end
+end
+
+class CLI
+  attr_reader :application
+
+  def initialize
+    @application = ExpenseData.new
+  end
+
+  def run(arguments)
+    case arguments.first
+    when nil then display_help() # empty ARGV object
+    when 'show_list' then application.show_list()
+    when 'add' then application.add(arguments[1..])
+    when 'search' then application.search(arguments[1..])
+    when 'delete' then application.delete(arguments[1..])
+    when 'clear' then application.clear()
+    when 'list' then application.list()
+    else nil
+    end
+  end
+
+  def display_help
+    puts <<~HELP
+    An expense recording system
+
+    Commands:
+
+    add AMOUNT MEMO [DATE] - record a new expense
+    clear - delete all expenses
+    list - list all expenses
+    delete NUMBER - remove expense with id NUMBER
+    search QUERY - list expenses with a matching memo field
+    HELP
+  end
+end
+
+instance_of_CLI = CLI.new
+instance_of_CLI.run(ARGV)
+
+
+# puts application.db.exec("SELECT * FROM expenses;").values
+
+# case ARGV.first
+# when nil then application.display_help()
+# when 'show_list' then application.show_list()
+# when 'add' then application.add(ARGV[1..])
+# when 'clear' then clear(ARGV[1..])
+# when 'list' then list(ARGV[1..])
+# when 'delete' then delete(ARGV[1..])
+# when 'search' then search(ARGV[1..])
+# else nil
+# end
